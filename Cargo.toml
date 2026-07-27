@@ -1,0 +1,19 @@
+[package]
+name = "container-rs"
+version = "0.1.0"
+edition = "2021"
+description = "A minimal Linux container runtime in Rust (Rust port of the 500-LOC C container)"
+license = "GPL-3.0-or-later"
+
+[[bin]]
+name = "contained"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+nix = { version = "0.27", features = ["sched", "mount", "hostname", "user", "socket", "process", "fs", "signal"] }
+caps = "0.5"
+libseccomp = "0.3"
+
+[profile.release]
+opt-level = 2
