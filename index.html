@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>contained — a Linux container runtime in Rust</title>
+<meta name="description" content="A minimal Linux container runtime built from scratch in Rust: namespaces, pivot_root, capability dropping, and seccomp. Interactive demo." />
+
+<!-- ============================================================
+     REPLACE THESE with your own links before deploying:
+     ============================================================ -->
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Cormorant:wght@500;600&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+<style>
+  :root {
+    /* Palette — "night ink & tarot gilt": indigo-black, brass, verdigris,
+       parchment. Deliberately NOT the acid-green-on-black terminal cliché. */
+    --bg:        #0f0d17;
+    --panel:     #16131f;
+    --panel-2:   #1d1929;
+    --line:      #2b263f;
+    --gilt:      #caa24a;
+    --gilt-soft: #e3c877;
+    --parchment: #e9e3d4;
+    --muted:     #8b849c;
+    --patina:    #5fb3a1;
+    --rose:      #c76277;
+
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+    --display: "Cormorant", Georgia, serif;
+    --body: "Inter", system-ui, sans-serif;
+  }
+
+  * { box-sizing: border-box; }
+
+  html { scroll-behavior: smooth; }
+
+  body {
+    margin: 0;
+    background:
+      radial-gradient(1100px 620px at 78% -8%, rgba(202,162,74,0.10), transparent 60%),
+      radial-gradient(900px 700px at -5% 108%, rgba(95,179,161,0.07), transparent 55%),
+      var(--bg);
+    color: var(--parchment);
+    font-family: var(--body);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 24px; }
+
+  a { color: var(--gilt-soft); text-decoration: none; }
+  a:hover { text-decoration: underline; text-underline-offset: 3px; }
+  a:focus-visible, button:focus-visible, .term:focus-visible {
+    outline: 2px solid var(--gilt); outline-offset: 3px; border-radius: 3px;
+  }
+
+  /* ---------- Header ---------- */
+  header.site { padding: 46px 0 8px; }
+  .brandrow { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  .wordmark {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: clamp(28px, 5vw, 40px);
+    letter-spacing: -0.02em;
+    color: var(--parchment);
+  }
+  .wordmark .caret { color: var(--gilt); animation: blink 1.15s steps(1) infinite; }
+  .eyebrow {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .tagline {
+    font-family: var(--display);
+    font-size: clamp(20px, 3.4vw, 29px);
+    font-weight: 500;
+    color: var(--parchment);
+    margin: 18px 0 6px;
+    max-width: 42ch;
+    line-height: 1.25;
+  }
+  .tagline em { color: var(--gilt-soft); font-style: italic; }
+  .links { display: flex; gap: 22px; flex-wrap: wrap; margin-top: 18px; font-family: var(--mono); font-size: 14px; }
+  .links a { display: inline-flex; align-items: center; gap: 7px; }
+  .links a::before { content: "↳"; color: var(--gilt); }
+
+  /* ---------- Terminal (the signature element) ---------- */
+  .terminal-shell { margin: 34px 0 10px; }
+  .term-hint {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--muted);
+    margin: 0 0 9px 2px;
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  }
+  .term-hint .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--patina); box-shadow: 0 0 8px var(--patina); }
+
+  .window {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    overflow: hidden;
+    box-shadow: 0 30px 70px -30px rgba(0,0,0,0.75), 0 0 0 1px rgba(202,162,74,0.05);
+  }
+  .titlebar {
+    display: flex; align-items: center; gap: 9px;
+    padding: 12px 15px;
+    background: linear-gradient(var(--panel-2), var(--panel));
+    border-bottom: 1px solid var(--line);
+  }
+  .lamp { width: 11px; height: 11px; border-radius: 50%; }
+  .lamp.r { background: #4a3540; box-shadow: inset 0 0 0 1px rgba(199,98,119,0.5); }
+  .lamp.y { background: #4a4130; box-shadow: inset 0 0 0 1px rgba(202,162,74,0.5); }
+  .lamp.g { background: #2f4740; box-shadow: inset 0 0 0 1px rgba(95,179,161,0.5); }
+  .titlebar .name {
+    margin-left: 8px; font-family: var(--mono); font-size: 12.5px; color: var(--muted);
+  }
+  .titlebar .badge {
+    margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--gilt);
+    border: 1px solid var(--line); padding: 3px 8px; border-radius: 5px;
+  }
+
+  .term {
+    font-family: var(--mono);
+    font-size: 13.5px;
+    line-height: 1.62;
+    padding: 18px 18px 16px;
+    height: 430px;
+    overflow-y: auto;
+    color: var(--parchment);
+    white-space: pre-wrap;
+    word-break: break-word;
+    cursor: text;
+    scrollbar-color: var(--line) transparent;
+  }
+  .term::-webkit-scrollbar { width: 9px; }
+  .term::-webkit-scrollbar-thumb { background: var(--line); border-radius: 9px; }
+
+  .term .step  { color: var(--gilt); }        /* "=>" boot prefixes  */
+  .term .ok    { color: var(--patina); }       /* "done." / success   */
+  .term .path  { color: var(--gilt-soft); }
+  .term .err   { color: var(--rose); }
+  .term .dim   { color: var(--muted); }
+  .term .card  { color: var(--gilt-soft); font-weight: 700; }
+
+  .prompt-line { display: flex; }
+  .prompt { color: var(--patina); flex: none; margin-right: 8px; }
+  .cmdinput {
+    flex: 1 1 auto;
+    background: transparent; border: none; outline: none;
+    color: var(--parchment);
+    font-family: var(--mono); font-size: 13.5px; line-height: 1.62;
+    padding: 0; caret-color: var(--gilt);
+  }
+  .cursor {
+    display: inline-block; width: 8px; height: 1.05em; vertical-align: text-bottom;
+    background: var(--gilt); animation: blink 1.15s steps(1) infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  /* ---------- Mechanisms ---------- */
+  section { padding: 40px 0; }
+  .section-label {
+    font-family: var(--mono); font-size: 12px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: var(--gilt); margin-bottom: 20px;
+  }
+  h2.head {
+    font-family: var(--display); font-weight: 600; font-size: clamp(24px, 4vw, 34px);
+    margin: 0 0 8px; color: var(--parchment); line-height: 1.15;
+  }
+  .lede { color: var(--muted); max-width: 62ch; margin: 0 0 26px; }
+
+  .mechs { display: grid; grid-template-columns: repeat(2, 1fr); gap: 1px; background: var(--line);
+           border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .mech { background: var(--panel); padding: 20px 20px 22px; }
+  .mech .k { font-family: var(--mono); font-size: 12.5px; color: var(--gilt); margin-bottom: 7px; }
+  .mech .t { font-family: var(--body); font-weight: 500; color: var(--parchment); margin-bottom: 4px; }
+  .mech .d { font-size: 14px; color: var(--muted); line-height: 1.5; }
+
+  /* ---------- Recording / CTA ---------- */
+  .recording {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 11px;
+    padding: 26px; display: grid; gap: 16px;
+  }
+  .recording .placeholder {
+    border: 1px dashed var(--line); border-radius: 8px; padding: 34px 20px;
+    text-align: center; color: var(--muted); font-family: var(--mono); font-size: 13px;
+  }
+  /* Frame the asciinema embed so it sits inside the palette rather than
+     floating on its own default background. */
+  .cast-frame {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 14px;
+    background: var(--panel-2);
+    display: flex;
+    justify-content: center;
+  }
+  .cast-frame .asciinema-player-wrapper,
+  .cast-frame .ap-wrapper {
+    border-radius: 6px;
+    overflow: hidden;
+    max-width: 100%;
+  }
+  .btnrow { display: flex; gap: 12px; flex-wrap: wrap; }
+  .btn {
+    font-family: var(--mono); font-size: 13px; padding: 10px 16px; border-radius: 7px;
+    border: 1px solid var(--gilt); color: var(--gilt-soft); background: transparent; cursor: pointer;
+  }
+  .btn.solid { background: var(--gilt); color: #201a08; border-color: var(--gilt); font-weight: 700; }
+  .btn:hover { text-decoration: none; filter: brightness(1.08); }
+
+  footer.site {
+    border-top: 1px solid var(--line); margin-top: 20px; padding: 28px 0 60px;
+    display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    font-family: var(--mono); font-size: 12.5px; color: var(--muted);
+  }
+
+  @media (max-width: 620px) {
+    .mechs { grid-template-columns: 1fr; }
+    .term { height: 62vh; }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cursor, .wordmark .caret { animation: none; }
+    html { scroll-behavior: auto; }
+  }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header class="site">
+    <div class="brandrow">
+      <span class="wordmark">contained<span class="caret">_</span></span>
+      <span class="eyebrow">a container runtime, from scratch</span>
+    </div>
+    <p class="tagline">
+      A Linux container is just a process wearing a disguise. This one is built
+      by hand in Rust — namespaces, <em>pivot_root</em>, dropped capabilities,
+      a seccomp filter — and it draws a <em>tarot card</em> for its hostname.
+    </p>
+    <nav class="links">
+      <!-- REPLACE href values with your own -->
+      <a href="https://github.com/yourname/container-rs" target="_blank" rel="noopener">source on github</a>
+      <a href="#recording">the real recording</a>
+      <a href="#how">how it works</a>
+    </nav>
+  </header>
+
+  <!-- ================= SIGNATURE: the interactive terminal ================= -->
+  <div class="terminal-shell">
+    <p class="term-hint">
+      <span class="dot"></span>
+      Interactive reproduction — replays the real boot sequence, then type
+      <code style="color:var(--gilt-soft)">help</code>. Reload to draw a new card.
+    </p>
+    <div class="window">
+      <div class="titlebar">
+        <span class="lamp r"></span><span class="lamp y"></span><span class="lamp g"></span>
+        <span class="name">sudo ./contained -m ./rootfs -u 0 -c /bin/sh</span>
+        <span class="badge">rust · x86_64</span>
+      </div>
+      <div id="term" class="term" tabindex="0" aria-label="Interactive container terminal demo"></div>
+    </div>
+  </div>
+
+  <!-- ================= how it works ================= -->
+  <section id="how">
+    <div class="section-label">Under the hood</div>
+    <h2 class="head">Six namespaces, minus the dangerous parts</h2>
+    <p class="lede">
+      A single <code>clone()</code> call with the right flags gives the process
+      its own view of the system. Then the runtime deliberately takes power away
+      from itself before handing control to your command.
+    </p>
+    <div class="mechs">
+      <div class="mech">
+        <div class="k">CLONE_NEWNS · pivot_root</div>
+        <div class="t">Its own filesystem</div>
+        <div class="d">Bind-mounts the rootfs, pivots into it, and unmounts the old root. The container can't see the host filesystem at all.</div>
+      </div>
+      <div class="mech">
+        <div class="k">CLONE_NEWUSER</div>
+        <div class="t">Remapped identity</div>
+        <div class="d">Unshares a user namespace; the parent writes uid_map/gid_map so uid 0 inside maps to an unprivileged range outside.</div>
+      </div>
+      <div class="mech">
+        <div class="k">CLONE_NEWPID · NET · IPC · UTS</div>
+        <div class="t">Its own everything else</div>
+        <div class="d">Fresh PID table starting at 1, isolated network stack, private IPC, and its own hostname — the tarot card.</div>
+      </div>
+      <div class="mech">
+        <div class="k">capabilities + seccomp</div>
+        <div class="t">Teeth pulled</div>
+        <div class="d">Drops ~20 capabilities (mknod, sys_admin, sys_boot…) and EPERMs risky syscalls like ptrace and TIOCSTI before exec.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= the real recording ================= -->
+  <section id="recording">
+    <div class="section-label">Proof it runs</div>
+    <h2 class="head">Watch the real thing</h2>
+    <p class="lede">
+      The terminal above is a faithful client-side reproduction. Here's the
+      genuine article: the compiled binary booting a busybox container, recorded
+      with asciinema.
+    </p>
+    <div class="recording">
+      <div class="cast-frame">
+        <script src="https://asciinema.org/a/FIetfglE4DJinqAT.js" id="asciicast-FIetfglE4DJinqAT" async="true"></script>
+      </div>
+      <div class="btnrow">
+        <!-- REPLACE hrefs -->
+        <a class="btn solid" href="https://github.com/yourname/container-rs" target="_blank" rel="noopener">Read the code</a>
+        <a class="btn" href="https://blog.lizzie.io/linux-containers-in-500-loc.html" target="_blank" rel="noopener">Original C project ↗</a>
+      </div>
+    </div>
+  </section>
+
+  <footer class="site">
+    <span>built in rust · ported from the 500-loc C container by lizzie dixon</span>
+    <span>&copy; <span id="yr"></span> yourname</span>
+  </footer>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var termEl = document.getElementById("term");
+  document.getElementById("yr").textContent = new Date().getFullYear();
+
+  var reduceMotion = window.matchMedia &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // --- tarot hostname generator (mirrors the Rust/C choose_hostname) ---
+  var SUITS = ["swords", "wands", "pentacles", "cups"];
+  var MINOR = ["ace","two","three","four","five","six","seven","eight","nine",
+               "ten","page","knight","queen","king"];
+  var MAJOR = ["fool","magician","high-priestess","empress","emperor","hierophant",
+               "lovers","chariot","strength","hermit","wheel","justice","hanged-man",
+               "death","temperance","devil","tower","star","moon","sun","judgment","world"];
+
+  function hex5() {
+    // a plausible "uptime seconds" style 5-hex prefix
+    return (Math.floor(Date.now() / 1000) & 0xfffff).toString(16).padStart(5, "0");
+  }
+  function drawHostname() {
+    var ix = Math.floor(Math.random() * 78);
+    if (ix < MAJOR.length) return hex5() + "-" + MAJOR[ix];
+    ix -= MAJOR.length;
+    return hex5() + "c-" + MINOR[ix % MINOR.length] + "-of-" + SUITS[Math.floor(ix / MINOR.length)];
+  }
+
+  var HOSTNAME = drawHostname();
+  var PID = 1000 + Math.floor(Math.random() * 9000);
+  var OLDROOT = "/oldroot." + Math.random().toString(36).slice(2, 8);
+
+  // --- boot sequence (real output from the compiled binary) ---
+  // each entry: [text, className]. null className = default color.
+  var BOOT = [
+    ['=> ', 'step'], ['validating Linux version...', null], ['6.6.87 on x86_64.\n', 'ok'],
+    ['=> ', 'step'], ['remounting everything with MS_PRIVATE...', null], ['remounted.\n', 'ok'],
+    ['=> ', 'step'], ['making a temp directory and a bind mount there...', null], ['done.\n', 'ok'],
+    ['=> ', 'step'], ['pivoting root...', null], ['done.\n', 'ok'],
+    ['=> ', 'step'], ['unmounting ', null], [OLDROOT, 'path'], ['...', null], ['done.\n', 'ok'],
+    ['=> ', 'step'], ['trying a user namespace...', null],
+      ['writing /proc/' + PID + '/uid_map...', 'dim'], ['writing /proc/' + PID + '/gid_map...', 'dim'], ['done.\n', 'ok'],
+    ['=> ', 'step'], ['switching to uid 0 / gid 0...', null], ['done.\n', 'ok'],
+    ['=> ', 'step'], ['dropping capabilities...', null], ['bounding...', 'dim'], ['inheritable...', 'dim'], ['done.\n', 'ok'],
+    ['=> ', 'step'], ['filtering syscalls...', null], ['done.\n', 'ok']
+  ];
+
+  function span(text, cls) {
+    var s = document.createElement("span");
+    if (cls) s.className = cls;
+    s.textContent = text;
+    return s;
+  }
+  function append(text, cls) { termEl.appendChild(span(text, cls)); }
+  function scrollBottom() { termEl.scrollTop = termEl.scrollHeight; }
+
+  // --- command handlers (outputs faithful to the busybox rootfs run) ---
+  var BIN = ["busybox","cat","echo","hostname","id","ls","mount","ps","sh","whoami"];
+  function pad(s, n) { s = String(s); while (s.length < n) s += " "; return s; }
+
+  var COMMANDS = {
+    help: function () {
+      return "available: " + Object.keys(COMMANDS).sort().join("  ") + "\n" +
+             "(this is a reproduction — reload the page to draw a new card)\n";
+    },
+    whoami:  function () { return "root\n"; },
+    hostname:function () { return HOSTNAME + "\n"; },
+    id:      function () { return "uid=0 gid=0 groups=0\n"; },
+    ls:      function () { return BIN.join("  ") + "\n"; },
+    ps:      function () {
+      return "PID   USER     TIME  COMMAND\n" +
+             "    1 root      0:00 /bin/sh\n" +
+             "    " + (Math.floor(Math.random()*8)+4) + " root      0:00 ps\n";
+    },
+    uname:   function () { return "Linux " + HOSTNAME + " 6.6.87 #1 SMP x86_64 GNU/Linux\n"; },
+    card:    function () {
+      return "this container drew:  " + "\u2726 " + HOSTNAME.replace(/^[0-9a-f]+c?-/, "") + " \u2726\n";
+    },
+    clear:   function () { termEl.innerHTML = ""; return ""; },
+    exit:    function () {
+      running = false;
+      return "\n=> container exited. the process is gone, the namespaces collapsed.\n   reload to draw a new card.\n";
+    }
+  };
+
+  function run(raw) {
+    var cmd = raw.trim();
+    if (cmd === "") return "";
+    var base = cmd.split(/\s+/)[0];
+    // allow "ls /bin", "uname -a", "cat ..." to resolve to the base command
+    if (base === "cat") return "cat: this is a reproduction; the real rootfs has no readable files here\n";
+    if (COMMANDS.hasOwnProperty(base)) return COMMANDS[base]();
+    return "sh: " + base + ": not found\n";
+  }
+
+  // --- interactive prompt ---
+  var running = true;
+  var history = [];
+  var histIdx = -1;
+
+  function newPromptLine() {
+    if (!running) return;
+    var line = document.createElement("div");
+    line.className = "prompt-line";
+    var p = span("/ # ", "prompt"); p.classList.add("prompt");
+    var input = document.createElement("input");
+    input.className = "cmdinput";
+    input.setAttribute("autocomplete", "off");
+    input.setAttribute("autocapitalize", "off");
+    input.setAttribute("autocorrect", "off");
+    input.setAttribute("spellcheck", "false");
+    input.setAttribute("aria-label", "container command input");
+    line.appendChild(p);
+    line.appendChild(input);
+    termEl.appendChild(line);
+    input.focus();
+    scrollBottom();
+
+    input.addEventListener("keydown", function (e) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        var val = input.value;
+        // freeze the current line into static echoed text
+        line.className = "";
+        line.textContent = "";
+        line.appendChild(span("/ # ", "prompt"));
+        line.appendChild(span(val + "\n", null));
+        if (val.trim() !== "") { history.push(val); }
+        histIdx = history.length;
+        var out = run(val);
+        if (out) {
+          if (/: not found\n$/.test(out)) append(out, "err");
+          else append(out, null);
+        }
+        newPromptLine();
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        if (histIdx > 0) { histIdx--; input.value = history[histIdx]; }
+      } else if (e.key === "ArrowDown") {
+        e.preventDefault();
+        if (histIdx < history.length - 1) { histIdx++; input.value = history[histIdx]; }
+        else { histIdx = history.length; input.value = ""; }
+      }
+    });
+  }
+
+  // clicking anywhere in the terminal focuses the active input
+  termEl.addEventListener("click", function () {
+    var inp = termEl.querySelector(".cmdinput:not([disabled])");
+    if (inp) inp.focus();
+  });
+
+  // --- type out the boot sequence, then start the prompt ---
+  function typeBoot(done) {
+    if (reduceMotion) {
+      BOOT.forEach(function (b) { append(b[0], b[1]); });
+      append("\n");
+      done();
+      return;
+    }
+    var i = 0;
+    (function next() {
+      if (i >= BOOT.length) { append("\n"); scrollBottom(); done(); return; }
+      append(BOOT[i][0], BOOT[i][1]);
+      scrollBottom();
+      var delay = /\n$/.test(BOOT[i][0]) ? 130 : 55;
+      i++;
+      setTimeout(next, delay);
+    })();
+  }
+
+  typeBoot(function () {
+    append("hint: try  ", "dim"); append("hostname", "card"); append("  ·  ", "dim");
+    append("id  ·  ls  ·  ps  ·  help\n\n", "dim");
+    newPromptLine();
+  });
+})();
+</script>
+</body>
+</html>
